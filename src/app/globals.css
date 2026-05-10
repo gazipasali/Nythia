@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 230 25% 6%;
+    --foreground: 220 15% 92%;
+
+    --card: 230 25% 8%;
+    --card-foreground: 220 15% 92%;
+
+    --popover: 230 25% 8%;
+    --popover-foreground: 220 15% 92%;
+
+    --primary: 220 10% 78%;
+    --primary-foreground: 230 25% 6%;
+
+    --secondary: 230 20% 14%;
+    --secondary-foreground: 220 15% 92%;
+
+    --muted: 230 18% 16%;
+    --muted-foreground: 220 12% 60%;
+
+    --accent: 230 20% 14%;
+    --accent-foreground: 220 15% 92%;
+
+    --destructive: 0 75% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 230 20% 14%;
+    --input: 230 20% 14%;
+    --ring: 220 10% 70%;
+
+    --sidebar: 230 28% 5%;
+    --sidebar-foreground: 220 15% 92%;
+    --sidebar-muted: 220 10% 50%;
+    --sidebar-accent: 230 22% 12%;
+    --sidebar-border: 230 22% 12%;
+
+    --radius: 0.6rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  body {
+    background-image:
+      radial-gradient(60% 40% at 20% 0%, hsl(220 8% 18% / 0.2), transparent 60%),
+      radial-gradient(50% 35% at 100% 100%, hsl(220 8% 18% / 0.15), transparent 60%);
+    min-height: 100vh;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted));
+    border-radius: 9999px;
+  }
+}
+
+.auth-bg {
+  background:
+    radial-gradient(50% 50% at 50% 50%, hsl(230 25% 8%) 0%, hsl(230 28% 4%) 100%);
+}
+
+.auth-card {
+  background: linear-gradient(
+    180deg,
+    hsl(230 25% 9% / 0.95) 0%,
+    hsl(230 28% 6% / 0.95) 100%
+  );
+  border: 1px solid hsl(230 20% 16%);
+  box-shadow:
+    0 1px 0 hsl(220 15% 100% / 0.04) inset,
+    0 24px 60px -20px hsl(220 10% 40% / 0.15);
+}
+
+.code-bg {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      hsl(230 25% 7%) 0px,
+      hsl(230 25% 7%) 24px,
+      hsl(230 25% 8%) 24px,
+      hsl(230 25% 8%) 25px
+    );
+  color: hsl(220 12% 36%);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+@keyframes code-scroll {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-33.333%);
+  }
+}
+
+.animate-code-scroll {
+  animation: code-scroll 60s linear infinite;
+}

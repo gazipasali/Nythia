@@ -1,0 +1,31 @@
+// Prisma schema for Nythia
+// Note: SQLite doesn't support native enums, so role/status are validated as strings.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  role         String   @default("USER")
+  status       String   @default("PENDING")
+  vouchedById  String?
+  vouchedBy    User?    @relation("Vouch", fields: [vouchedById], references: [id])
+  vouchedFor   User[]   @relation("Vouch")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+}
