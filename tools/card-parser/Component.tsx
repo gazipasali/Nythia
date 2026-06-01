@@ -74,6 +74,106 @@ function normalizeYear(y: string): string {
 }
 
 const CARD_NUMBER_RE = /\b(\d{13,19})\b/;
+const DATE_RE = /^\d{1,2}\/\d{2,4}$/;
+const CVV_RE = /^\d{3,4}$/;
+const STANDALONE_CARD_RE = /^\d{13,19}$/;
+const MONTH_RE = /^\d{1,2}$/;
+const YEAR_RE = /^\d{2,4}$/;
+
+/**
+ * Pre-process raw input into normalized single-line card entries.
+ *
+ * Supported formats:
+ *  1) Single-line pipe:    4921307077061700|06/26|378
+ *  2) Single-line pipe:    4921307077061700|06|26|378
+ *  3) Single-line space:   4921307077061700 06/26 378
+ *  4) Single-line mixed:   4921307077061700 06 26 378
+ *  5) Multi-line with pipes on their own lines:
+ *       4921307077061700
+ *       |
+ *       06/26
+ *       |
+ *       842
+ *  6) Multi-line without explicit pipes:
+ *       4921307077061700
+ *       06/26
+ *       842
+ *  7) All of the above mixed with metadata lines (names, prices, etc.)
+ */
+function normalizeInput(raw: string): string[] {
+  const lines = raw.split(/\r?\n/).map((l) => l.trim());
+  const normalized: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // --- Case A: line already contains a card number + delimiter(s) on one line ---
+    if (line.match(CARD_NUMBER_RE) && !STANDALONE_CARD_RE.test(line)) {
+      normalized.push(line);
+      i++;
+      continue;
+    }
+
+    // --- Case B: standalone card number, collect following lines ---
+    if (STANDALONE_CARD_RE.test(line)) {
+      const parts: string[] = [line];
+      let j = i + 1;
+
+      while (j < lines.length) {
+        const next = lines[j].trim();
+
+        // skip empty lines
+        if (!next) { j++; continue; }
+
+        // skip bare pipe delimiters
+        if (next === "|") { j++; continue; }
+
+        // if we hit another card number, stop
+        if (STANDALONE_CARD_RE.test(next)) break;
+
+        // date field  (06/26, 6/2026, 12/29, etc.)
+        if (DATE_RE.test(next)) { parts.push(next); j++; continue; }
+
+        // standalone month (01-12) — only accept if we don't have a date yet
+        if (MONTH_RE.test(next) && parts.length === 1) {
+          const monthNum = parseInt(next, 10);
+          if (monthNum >= 1 && monthNum <= 12) { parts.push(next); j++; continue; }
+        }
+
+        // standalone year (2-4 digits) — only accept right after month
+        if (YEAR_RE.test(next) && parts.length === 2 && MONTH_RE.test(parts[1])) {
+          parts.push(next); j++; continue;
+        }
+
+        // CVV (3-4 digits) — accept if we already have date info
+        if (CVV_RE.test(next) && parts.length >= 2) { parts.push(next); j++; continue; }
+
+        // anything else is metadata — skip, but keep scanning for more fields
+        // unless we already collected enough data
+        if (parts.length >= 3) {
+          j++;
+          continue;
+        }
+
+        // unrecognised line and not enough data yet — stop
+        break;
+      }
+
+      // Build the assembled string with pipes
+      if (parts.length >= 2) {
+        normalized.push(parts.join("|"));
+      }
+      i = j;
+      continue;
+    }
+
+    // --- Case C: not a card-related line, skip ---
+    i++;
+  }
+
+  return normalized;
+}
 
 function parseLine(raw: string): ParsedCard | null {
   const trimmed = raw.trim();
@@ -87,6 +187,7 @@ function parseLine(raw: string): ParsedCard | null {
     trimmed.indexOf(cardNumber) + cardNumber.length,
   );
 
+  // Split remaining text by known delimiters
   const delimiters = ["|", ":", ";", "\t", ","];
   let fields: string[] = [];
   for (const d of delimiters) {
@@ -99,36 +200,46 @@ function parseLine(raw: string): ParsedCard | null {
     }
   }
 
-  if (fields.length < 2) {
+  // Fall back to space-splitting
+  if (fields.length < 1) {
     const spaceFields = afterNumber.trim().split(/\s+/).filter(Boolean);
-    if (spaceFields.length >= 2) fields = spaceFields;
+    if (spaceFields.length >= 1) fields = spaceFields;
   }
 
-  if (fields.length < 2) return null;
+  if (fields.length < 1) return null;
 
-  const monthRaw = fields[0].replace(/\D/g, "");
-  const yearRaw = fields[1].replace(/\D/g, "");
+  let month = "";
+  let year = "";
+  let cvvField = "";
 
-  if (!monthRaw || !yearRaw) return null;
-  const monthNum = parseInt(monthRaw, 10);
+  // --- Strategy 1: first field is combined date "MM/YY" or "MM/YYYY" ---
+  if (DATE_RE.test(fields[0])) {
+    const [m, y] = fields[0].split("/");
+    month = m.padStart(2, "0");
+    year = normalizeYear(y);
+    cvvField = fields[1] ?? "";
+  }
+  // --- Strategy 2: separate month and year fields ---
+  else if (fields.length >= 2) {
+    const monthRaw = fields[0].replace(/\D/g, "");
+    const yearRaw = fields[1].replace(/\D/g, "");
+    if (!monthRaw || !yearRaw) return null;
+    month = monthRaw.padStart(2, "0");
+    year = normalizeYear(yearRaw);
+    cvvField = fields[2] ?? "";
+  } else {
+    return null;
+  }
+
+  const monthNum = parseInt(month, 10);
   if (monthNum < 1 || monthNum > 12) return null;
 
-  const month = monthRaw.padStart(2, "0");
-  const year = normalizeYear(yearRaw);
-  const cvv = fields.length >= 3 ? fields[2].replace(/\D/g, "") : "";
+  let cvv = cvvField ? cvvField.replace(/\D/g, "") : "";
 
+  // If CVV doesn't look valid, try to extract 3-4 digit sequence from it
   if (cvv && (cvv.length < 3 || cvv.length > 4)) {
-    const altCvv = fields[2]?.match(/\b(\d{3,4})\b/);
-    return {
-      number: cardNumber,
-      month,
-      year,
-      cvv: altCvv ? altCvv[1] : "",
-      brand: detectBrand(cardNumber),
-      last4: cardNumber.slice(-4),
-      valid: luhnCheck(cardNumber),
-      raw: trimmed,
-    };
+    const altCvv = cvvField.match(/\b(\d{3,4})\b/);
+    cvv = altCvv ? altCvv[1] : "";
   }
 
   return {
@@ -253,8 +364,7 @@ export function Component() {
 
   const cards = useMemo(() => {
     if (!input.trim()) return [];
-    return input
-      .split(/\r?\n/)
+    return normalizeInput(input)
       .map(parseLine)
       .filter((c): c is ParsedCard => c !== null);
   }, [input]);
