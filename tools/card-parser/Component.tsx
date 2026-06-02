@@ -80,25 +80,30 @@ const CVV_RE = /^\d{3,4}$/;
 const MONTH_RE = /^(0?[1-9]|1[0-2])$/;
 const YEAR_RE = /^(20\d{2}|\d{2})$/;
 
+function hasCard(text: string): boolean {
+  const CARD_PATTERNS = [
+    /\b(\d{4}[\s\-]+\d{4}[\s\-]+\d{4}[\s\-]+\d{1,7})\b/,
+    /\b(\d{4}[\s\-]+\d{6}[\s\-]+\d{4,5})\b/,
+    /\b(\d{4}[\s\-]+\d{4}[\s\-]+\d{4}[\s\-]+\d{4}[\s\-]+\d{1,3})\b/,
+    /\b(\d{13,19})\b/
+  ];
+  for (const pattern of CARD_PATTERNS) {
+    if (pattern.test(text)) return true;
+  }
+  return /\b((?:\d[\s\-]*){13,19})\b/.test(text);
+}
+
+function hasDate(text: string): boolean {
+  return (
+    /\b(0?[1-9]|1[0-2])\s*[\/\-\|]\s*(20\d{2}|\d{2})\b/.test(text) ||
+    /\b(0[1-9]|1[0-2])(20\d{2}|\d{2})\b/.test(text) ||
+    /\b(0?[1-9]|1[0-2])\s+(20\d{2}|\d{2})\b/.test(text)
+  );
+}
+
 /**
  * Pre-process raw input into normalized single-line card entries.
- *
- * Supported formats:
- *  1) Single-line pipe:    4921307077061700|06/26|378
- *  2) Single-line pipe:    4921307077061700|06|26|378
- *  3) Single-line space:   4921307077061700 06/26 378
- *  4) Single-line mixed:   4921307077061700 06 26 378
- *  5) Multi-line with pipes on their own lines:
- *       4921307077061700
- *       |
- *       06/26
- *       |
- *       842
- *  6) Multi-line without explicit pipes:
- *       4921307077061700
- *       06/26
- *       842
- *  7) All of the above mixed with metadata lines (names, prices, etc.)
+ * Groups multi-line card data together automatically without getting confused by metadata.
  */
 function normalizeInput(raw: string): string[] {
   const lines = raw.split(/\r?\n/).map((l) => l.trim());
@@ -108,68 +113,28 @@ function normalizeInput(raw: string): string[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // --- Case A: line already contains a card number + delimiter(s) on one line ---
-    if (line.match(CARD_NUMBER_RE) && !STANDALONE_CARD_RE.test(line)) {
-      normalized.push(line);
-      i++;
-      continue;
-    }
-
-    // --- Case B: standalone card number, collect following lines ---
-    if (STANDALONE_CARD_RE.test(line)) {
-      const parts: string[] = [line];
-      let j = i + 1;
-
-      while (j < lines.length) {
-        const next = lines[j].trim();
-
-        // skip empty lines
-        if (!next) { j++; continue; }
-
-        // skip bare pipe delimiters
-        if (next === "|") { j++; continue; }
-
-        // if we hit another card number, stop
-        if (STANDALONE_CARD_RE.test(next)) break;
-
-        // date field  (06/26, 6/2026, 12/29, etc.)
-        if (DATE_RE.test(next)) { parts.push(next); j++; continue; }
-
-        // standalone month (01-12) — only accept if we don't have a date yet
-        if (MONTH_RE.test(next) && parts.length === 1) {
-          const monthNum = parseInt(next, 10);
-          if (monthNum >= 1 && monthNum <= 12) { parts.push(next); j++; continue; }
-        }
-
-        // standalone year (2-4 digits) — only accept right after month
-        if (YEAR_RE.test(next) && parts.length === 2 && MONTH_RE.test(parts[1])) {
-          parts.push(next); j++; continue;
-        }
-
-        // CVV (3-4 digits) — accept if we already have date info
-        if (CVV_RE.test(next) && parts.length >= 2) { parts.push(next); j++; continue; }
-
-        // anything else is metadata — skip, but keep scanning for more fields
-        // unless we already collected enough data
-        if (parts.length >= 3) {
+    if (hasCard(line)) {
+      if (hasDate(line)) {
+        // Complete single-line card
+        normalized.push(line);
+        i++;
+      } else {
+        // Card found, but no date. Collect following lines until next card.
+        const parts: string[] = [line];
+        let j = i + 1;
+        while (j < lines.length) {
+          const next = lines[j].trim();
+          if (!next || next === "|") { j++; continue; }
+          if (hasCard(next)) break; // Found next card, stop collecting
+          parts.push(next);
           j++;
-          continue;
         }
-
-        // unrecognised line and not enough data yet — stop
-        break;
+        normalized.push(parts.join(" | "));
+        i = j;
       }
-
-      // Build the assembled string with pipes
-      if (parts.length >= 2) {
-        normalized.push(parts.join("|"));
-      }
-      i = j;
-      continue;
+    } else {
+      i++;
     }
-
-    // --- Case C: not a card-related line, skip ---
-    i++;
   }
 
   return normalized;
@@ -228,22 +193,27 @@ function parseLine(raw: string): ParsedCard | null {
   const dateRegexNoDelim = /\b(0[1-9]|1[0-2])(20\d{2}|\d{2})\b/;
   const dateRegexSpace = /\b(0?[1-9]|1[0-2])\s+(20\d{2}|\d{2})\b/;
 
+  let dateEndIndex = -1;
+
   let dMatch = remaining.match(dateRegexWithDelim);
   if (dMatch) {
     month = dMatch[1].padStart(2, "0");
     year = dMatch[2];
+    dateEndIndex = dMatch.index! + dMatch[0].length;
     remaining = remaining.replace(dMatch[0], " ");
   } else {
     dMatch = remaining.match(dateRegexNoDelim);
     if (dMatch) {
       month = dMatch[1];
       year = dMatch[2];
+      dateEndIndex = dMatch.index! + dMatch[0].length;
       remaining = remaining.replace(dMatch[0], " ");
     } else {
       dMatch = remaining.match(dateRegexSpace);
       if (dMatch) {
         month = dMatch[1].padStart(2, "0");
         year = dMatch[2];
+        dateEndIndex = dMatch.index! + dMatch[0].length;
         remaining = remaining.replace(dMatch[0], " ");
       }
     }
@@ -254,10 +224,20 @@ function parseLine(raw: string): ParsedCard | null {
   if (labeledCvv) {
     cvv = labeledCvv[1];
   } else {
-    const tokens = remaining.split(/[\s\|\:\;\,\t]+/).filter(Boolean);
-    const cvvTokens = tokens.filter((t) => /^\d{3,4}$/.test(t));
-    if (cvvTokens.length > 0) {
-      cvv = cvvTokens[0];
+    // Look after date first to avoid taking row numbers (like "1. ") as CVV
+    const afterDate = dateEndIndex !== -1 ? remaining.slice(dateEndIndex) : remaining;
+    const afterTokens = afterDate.split(/[\s\|\:\;\,\t]+/).filter(Boolean);
+    const afterCvvTokens = afterTokens.filter((t) => /^\d{3,4}$/.test(t));
+    
+    if (afterCvvTokens.length > 0) {
+      cvv = afterCvvTokens[0];
+    } else {
+      // Look anywhere, prefer last valid token
+      const tokens = remaining.split(/[\s\|\:\;\,\t]+/).filter(Boolean);
+      const cvvTokens = tokens.filter((t) => /^\d{3,4}$/.test(t));
+      if (cvvTokens.length > 0) {
+        cvv = cvvTokens[cvvTokens.length - 1];
+      }
     }
   }
 
