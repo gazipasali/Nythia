@@ -179,13 +179,42 @@ function parseLine(raw: string): ParsedCard | null {
   const line = raw.trim();
   if (!line) return null;
 
-  // Find card number
-  const cardMatch = line.match(CARD_NUMBER_RE);
-  if (!cardMatch) return null;
-  
-  const rawCard = cardMatch[1];
-  const cardNumber = rawCard.replace(/\D/g, "");
-  if (cardNumber.length < 13 || cardNumber.length > 19) return null;
+  // Find card number using structured patterns
+  const CARD_PATTERNS = [
+    /\b(\d{4}[\s\-]+\d{4}[\s\-]+\d{4}[\s\-]+\d{1,7})\b/,
+    /\b(\d{4}[\s\-]+\d{6}[\s\-]+\d{4,5})\b/,
+    /\b(\d{4}[\s\-]+\d{4}[\s\-]+\d{4}[\s\-]+\d{4}[\s\-]+\d{1,3})\b/,
+    /\b(\d{13,19})\b/
+  ];
+
+  let rawCard = "";
+  let cardNumber = "";
+
+  for (const pattern of CARD_PATTERNS) {
+    const match = line.match(pattern);
+    if (match) {
+      const clean = match[1].replace(/\D/g, "");
+      if (clean.length >= 13 && clean.length <= 19) {
+        rawCard = match[1];
+        cardNumber = clean;
+        break;
+      }
+    }
+  }
+
+  // Fallback to aggressive regex
+  if (!cardNumber) {
+    const aggressiveMatch = line.match(/\b((?:\d[\s\-]*){13,19})\b/);
+    if (aggressiveMatch) {
+      const clean = aggressiveMatch[1].replace(/\D/g, "");
+      if (clean.length >= 13 && clean.length <= 19) {
+        rawCard = aggressiveMatch[1];
+        cardNumber = clean;
+      }
+    }
+  }
+
+  if (!cardNumber) return null;
 
   // Mask the card number in the line
   let remaining = line.replace(rawCard, " ");
