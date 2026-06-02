@@ -73,12 +73,12 @@ function normalizeYear(y: string): string {
   return cleaned;
 }
 
-const CARD_NUMBER_RE = /\b(\d{13,19})\b/;
-const DATE_RE = /^\d{1,2}\/\d{2,4}$/;
+const CARD_NUMBER_RE = /(?:^|[^0-9])((?:\d[ \-]*){13,19})(?:[^0-9]|$)/;
+const STANDALONE_CARD_RE = /^((?:\d[ \-]*){13,19})$/;
+const DATE_RE = /^(0?[1-9]|1[0-2])\s*[\/\-\|]?\s*(20\d{2}|\d{2})$/;
 const CVV_RE = /^\d{3,4}$/;
-const STANDALONE_CARD_RE = /^\d{13,19}$/;
-const MONTH_RE = /^\d{1,2}$/;
-const YEAR_RE = /^\d{2,4}$/;
+const MONTH_RE = /^(0?[1-9]|1[0-2])$/;
+const YEAR_RE = /^(20\d{2}|\d{2})$/;
 
 /**
  * Pre-process raw input into normalized single-line card entries.
@@ -176,81 +176,73 @@ function normalizeInput(raw: string): string[] {
 }
 
 function parseLine(raw: string): ParsedCard | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
+  const line = raw.trim();
+  if (!line) return null;
 
-  const numMatch = trimmed.match(CARD_NUMBER_RE);
-  if (!numMatch) return null;
+  // Find card number
+  const cardMatch = line.match(CARD_NUMBER_RE);
+  if (!cardMatch) return null;
+  
+  const rawCard = cardMatch[1];
+  const cardNumber = rawCard.replace(/\D/g, "");
+  if (cardNumber.length < 13 || cardNumber.length > 19) return null;
 
-  const cardNumber = numMatch[1];
-  const afterNumber = trimmed.slice(
-    trimmed.indexOf(cardNumber) + cardNumber.length,
-  );
-
-  // Split remaining text by known delimiters
-  const delimiters = ["|", ":", ";", "\t", ","];
-  let fields: string[] = [];
-  for (const d of delimiters) {
-    if (afterNumber.includes(d)) {
-      fields = afterNumber
-        .split(d)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      break;
-    }
-  }
-
-  // Fall back to space-splitting
-  if (fields.length < 1) {
-    const spaceFields = afterNumber.trim().split(/\s+/).filter(Boolean);
-    if (spaceFields.length >= 1) fields = spaceFields;
-  }
-
-  if (fields.length < 1) return null;
+  // Mask the card number in the line
+  let remaining = line.replace(rawCard, " ");
 
   let month = "";
   let year = "";
-  let cvvField = "";
+  let cvv = "";
 
-  // --- Strategy 1: first field is combined date "MM/YY" or "MM/YYYY" ---
-  if (DATE_RE.test(fields[0])) {
-    const [m, y] = fields[0].split("/");
-    month = m.padStart(2, "0");
-    year = normalizeYear(y);
-    cvvField = fields[1] ?? "";
-  }
-  // --- Strategy 2: separate month and year fields ---
-  else if (fields.length >= 2) {
-    const monthRaw = fields[0].replace(/\D/g, "");
-    const yearRaw = fields[1].replace(/\D/g, "");
-    if (!monthRaw || !yearRaw) return null;
-    month = monthRaw.padStart(2, "0");
-    year = normalizeYear(yearRaw);
-    cvvField = fields[2] ?? "";
+  // 1. Try to find date
+  const dateRegexWithDelim = /\b(0?[1-9]|1[0-2])\s*[\/\-\|]\s*(20\d{2}|\d{2})\b/;
+  const dateRegexNoDelim = /\b(0[1-9]|1[0-2])(20\d{2}|\d{2})\b/;
+  const dateRegexSpace = /\b(0?[1-9]|1[0-2])\s+(20\d{2}|\d{2})\b/;
+
+  let dMatch = remaining.match(dateRegexWithDelim);
+  if (dMatch) {
+    month = dMatch[1].padStart(2, "0");
+    year = dMatch[2];
+    remaining = remaining.replace(dMatch[0], " ");
   } else {
-    return null;
+    dMatch = remaining.match(dateRegexNoDelim);
+    if (dMatch) {
+      month = dMatch[1];
+      year = dMatch[2];
+      remaining = remaining.replace(dMatch[0], " ");
+    } else {
+      dMatch = remaining.match(dateRegexSpace);
+      if (dMatch) {
+        month = dMatch[1].padStart(2, "0");
+        year = dMatch[2];
+        remaining = remaining.replace(dMatch[0], " ");
+      }
+    }
   }
 
-  const monthNum = parseInt(month, 10);
-  if (monthNum < 1 || monthNum > 12) return null;
-
-  let cvv = cvvField ? cvvField.replace(/\D/g, "") : "";
-
-  // If CVV doesn't look valid, try to extract 3-4 digit sequence from it
-  if (cvv && (cvv.length < 3 || cvv.length > 4)) {
-    const altCvv = cvvField.match(/\b(\d{3,4})\b/);
-    cvv = altCvv ? altCvv[1] : "";
+  // 2. Try to find CVV
+  const labeledCvv = remaining.match(/\b(?:cvv|cvc|ccv)[^\d]{0,3}(\d{3,4})\b/i);
+  if (labeledCvv) {
+    cvv = labeledCvv[1];
+  } else {
+    const tokens = remaining.split(/[\s\|\:\;\,\t]+/).filter(Boolean);
+    const cvvTokens = tokens.filter((t) => /^\d{3,4}$/.test(t));
+    if (cvvTokens.length > 0) {
+      cvv = cvvTokens[0];
+    }
   }
+
+  if (!month || !year) return null;
 
   return {
     number: cardNumber,
     month,
-    year,
+    year: normalizeYear(year),
     cvv,
     brand: detectBrand(cardNumber),
     last4: cardNumber.slice(-4),
     valid: luhnCheck(cardNumber),
-    raw: trimmed,
+    raw: line,
   };
 }
 
